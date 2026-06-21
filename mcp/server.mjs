@@ -277,6 +277,45 @@ function createArrowShape(snapshot, pageId, startId, endId, start, end) {
   return shapeId
 }
 
+function createRectShape(snapshot, parentId, x, y, w, h, text, options = {}) {
+  const shapeId = uniqueId(
+    snapshot.store,
+    'shape',
+    `rect-${text.replace(/\s+/g, '-').replace(/[\/\\]/g, '-')}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+  )
+  snapshot.store[shapeId] = {
+    id: shapeId,
+    typeName: 'shape',
+    type: 'geo',
+    x,
+    y,
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    index: nextIndex(),
+    parentId,
+    props: {
+      geo: 'rectangle',
+      w,
+      h,
+      color: options.color ?? 'blue',
+      labelColor: options.labelColor ?? 'black',
+      fill: options.fill ?? 'semi',
+      dash: 'draw',
+      size: options.size ?? 's',
+      font: 'draw',
+      align: 'middle',
+      verticalAlign: 'middle',
+      growY: 0,
+      url: '',
+      richText: toRichText(text),
+      scale: 1,
+    },
+    meta: { agentcanvasGenerated: true, ...(options.meta ?? {}) },
+  }
+  return shapeId
+}
+
 async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
   const snapshot = await loadSnapshot(canvasUrl)
   if (!snapshot) throw new Error('No canvas snapshot available.')
@@ -293,12 +332,11 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
     throw new Error('No visible files found in project directory.')
   }
 
-  const nodeWidth = 160
-  const nodeHeight = 50
-  const horizontalGap = 40
+  const nodeWidth = 180
+  const nodeHeight = 44
   const verticalGap = 16
-  const indent = 60
-  const framePadding = 40
+  const indent = 40
+  const framePadding = 32
 
   const baseX = options.x ?? 0
   const baseY = options.y ?? 0
@@ -341,39 +379,13 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
   const shapeByPath = new Map()
 
   for (const item of layout) {
-    const shapeId = uniqueId(
-      snapshot.store,
-      'shape',
-      `note-${item.relPath.replace(/[\/\\]/g, '-')}-${Date.now()}-${item.index}`,
-    )
+    const shapeId = createRectShape(snapshot, frameId, item.x, item.y, nodeWidth, nodeHeight, item.name, {
+      color: item.type === 'directory' ? 'blue' : 'yellow',
+      fill: 'semi',
+      size: 's',
+      meta: { projectPath: item.relPath },
+    })
     shapeByPath.set(item.relPath, shapeId)
-    snapshot.store[shapeId] = {
-      id: shapeId,
-      typeName: 'shape',
-      type: 'note',
-      x: item.x,
-      y: item.y,
-      rotation: 0,
-      isLocked: false,
-      opacity: 1,
-      index: nextIndex(),
-      parentId: frameId,
-      props: {
-        color: item.type === 'directory' ? 'blue' : 'yellow',
-        labelColor: 'black',
-        size: 's',
-        font: 'draw',
-        align: 'middle',
-        verticalAlign: 'middle',
-        growY: 0,
-        url: '',
-        richText: toRichText(item.name),
-        scale: 1,
-        textFirstEditedBy: null,
-        fontSizeAdjustment: null,
-      },
-      meta: { agentcanvasGenerated: true, projectPath: item.relPath },
-    }
   }
 
   // Draw arrows from parent to child (coordinates relative to frame)
@@ -475,10 +487,10 @@ async function createFileVisualization(canvasUrl, filePath, options = {}) {
   }
 
   const nodeWidth = 180
-  const nodeHeight = 60
+  const nodeHeight = 44
   const horizontalGap = 24
-  const verticalGap = 20
-  const framePadding = 40
+  const verticalGap = 16
+  const framePadding = 32
   const nodesPerRow = 3
 
   const baseX = options.x ?? 0
@@ -512,36 +524,14 @@ async function createFileVisualization(canvasUrl, filePath, options = {}) {
     const item = items[i]
     const row = Math.floor(i / nodesPerRow)
     const col = i % nodesPerRow
-    const shapeId = uniqueId(snapshot.store, 'shape', `note-${fileName}-${item.name}-${Date.now()}-${i}`)
     const x = framePadding + col * (nodeWidth + horizontalGap)
     const y = framePadding + row * (nodeHeight + verticalGap)
-    snapshot.store[shapeId] = {
-      id: shapeId,
-      typeName: 'shape',
-      type: 'note',
-      x,
-      y,
-      rotation: 0,
-      isLocked: false,
-      opacity: 1,
-      index: nextIndex(),
-      parentId: frameId,
-      props: {
-        color: colorForKind(item.kind),
-        labelColor: 'black',
-        size: 'm',
-        font: 'draw',
-        align: 'middle',
-        verticalAlign: 'middle',
-        growY: 0,
-        url: '',
-        richText: toRichText(`${item.name}`),
-        scale: 1,
-        textFirstEditedBy: null,
-        fontSizeAdjustment: null,
-      },
-      meta: { agentcanvasGenerated: true, kind: item.kind },
-    }
+    createRectShape(snapshot, frameId, x, y, nodeWidth, nodeHeight, item.name, {
+      color: colorForKind(item.kind),
+      fill: 'semi',
+      size: 's',
+      meta: { kind: item.kind },
+    })
   }
 
   await saveSnapshot(canvasUrl, snapshot)
@@ -630,12 +620,12 @@ async function createDependencyVisualization(canvasUrl, projectDir, options = {}
     fileNodes.push({ relPath, filePath, imports })
   }
 
-  const nodeWidth = 180
-  const nodeHeight = 50
-  const horizontalGap = 80
-  const verticalGap = 24
-  const framePadding = 40
-  const nodesPerRow = 4
+  const nodeWidth = 240
+  const nodeHeight = 44
+  const horizontalGap = 40
+  const verticalGap = 32
+  const framePadding = 32
+  const nodesPerRow = 3
 
   const baseX = options.x ?? 0
   const baseY = options.y ?? 0
@@ -670,40 +660,18 @@ async function createDependencyVisualization(canvasUrl, projectDir, options = {}
     const node = fileNodes[i]
     const row = Math.floor(i / nodesPerRow)
     const col = i % nodesPerRow
-    const shapeId = uniqueId(snapshot.store, 'shape', `note-dep-${node.relPath.replace(/[\/\\]/g, '-')}-${Date.now()}-${i}`)
     const x = framePadding + col * (nodeWidth + horizontalGap)
     const y = framePadding + row * (nodeHeight + verticalGap)
+    const shapeId = createRectShape(snapshot, frameId, x, y, nodeWidth, nodeHeight, node.relPath, {
+      color: node.relPath.startsWith('node_modules') ? 'gray' : 'blue',
+      fill: 'semi',
+      size: 's',
+      meta: { relPath: node.relPath },
+    })
     shapeByPath.set(node.relPath, shapeId)
-    snapshot.store[shapeId] = {
-      id: shapeId,
-      typeName: 'shape',
-      type: 'note',
-      x,
-      y,
-      rotation: 0,
-      isLocked: false,
-      opacity: 1,
-      index: nextIndex(),
-      parentId: frameId,
-      props: {
-        color: node.relPath.startsWith('node_modules') ? 'gray' : 'blue',
-        labelColor: 'black',
-        size: 's',
-        font: 'draw',
-        align: 'middle',
-        verticalAlign: 'middle',
-        growY: 0,
-        url: '',
-        richText: toRichText(node.relPath),
-        scale: 1,
-        textFirstEditedBy: null,
-        fontSizeAdjustment: null,
-      },
-      meta: { agentcanvasGenerated: true, relPath: node.relPath },
-    }
   }
 
-  // Draw dependency arrows (coordinates relative to frame)
+  // Draw dependency arrows from right edge to left edge (coordinates relative to frame)
   for (const node of fileNodes) {
     const fromShapeId = shapeByPath.get(node.relPath)
     if (!fromShapeId) continue
@@ -712,8 +680,8 @@ async function createDependencyVisualization(canvasUrl, projectDir, options = {}
       const toShapeId = shapeByPath.get(depRelPath)
       if (!toShapeId || toShapeId === fromShapeId) continue
       const toNode = snapshot.store[toShapeId]
-      const start = { x: fromNode.x + nodeWidth / 2, y: fromNode.y + nodeHeight / 2 }
-      const end = { x: toNode.x + nodeWidth / 2, y: toNode.y + nodeHeight / 2 }
+      const start = { x: fromNode.x + nodeWidth, y: fromNode.y + nodeHeight / 2 }
+      const end = { x: toNode.x, y: toNode.y + nodeHeight / 2 }
       createArrowShape(snapshot, frameId, fromShapeId, toShapeId, start, end)
     }
   }
