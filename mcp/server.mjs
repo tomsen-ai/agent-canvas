@@ -1,7 +1,15 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, stat, copyFile } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { mkdir, readdir, readFile, stat, copyFile } from 'node:fs/promises'
+import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import readline from 'node:readline'
+import tldrawUtils from '../web/node_modules/@tldraw/utils/dist-cjs/index.js'
+
+const { getIndexAbove } = tldrawUtils
+let lastIndex = 'a0'
+function nextIndex() {
+  lastIndex = getIndexAbove(lastIndex)
+  return lastIndex
+}
 
 const SERVER_NAME = 'AgentCanvas MCP'
 const SERVER_VERSION = '0.1.0'
@@ -184,6 +192,206 @@ function findCurrentPageId(snapshot) {
   return pages[0].id
 }
 
+const IGNORED_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'build',
+  'coverage',
+  '.venv',
+  '__pycache__',
+  '.turbo',
+  '.cache',
+  'canvas',
+])
+
+const IGNORED_FILES = new Set(['.DS_Store', '.gitignore', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'])
+
+async function scanDirectory(dir, maxDepth = 3, currentDepth = 0) {
+  if (currentDepth > maxDepth) return []
+  const entries = await readdir(dir, { withFileTypes: true })
+  const result = []
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (IGNORED_DIRS.has(entry.name)) continue
+      const children = await scanDirectory(join(dir, entry.name), maxDepth, currentDepth + 1)
+      result.push({ name: entry.name, type: 'directory', path: join(dir, entry.name), children })
+    } else {
+      if (IGNORED_FILES.has(entry.name)) continue
+      result.push({ name: entry.name, type: 'file', path: join(dir, entry.name) })
+    }
+  }
+  result.sort((a, b) => {
+    if (a.type === b.type) return a.name.localeCompare(b.name)
+    return a.type === 'directory' ? -1 : 1
+  })
+  return result
+}
+
+function flattenTree(nodes, basePath, list = [], depth = 0, parent = null) {
+  for (const node of nodes) {
+    const item = { ...node, depth, relPath: relative(basePath, node.path) || node.name, parent }
+    list.push(item)
+    if (node.children) {
+      flattenTree(node.children, basePath, list, depth + 1, item)
+    }
+  }
+  return list
+}
+
+function createArrowShape(snapshot, pageId, startId, endId, start, end) {
+  const shapeId = uniqueId(snapshot.store, 'shape', `arrow-${startId}-${endId}-${Date.now()}`)
+  snapshot.store[shapeId] = {
+    id: shapeId,
+    typeName: 'shape',
+    type: 'arrow',
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    index: nextIndex(),
+    parentId: pageId,
+    props: {
+      kind: 'elbow',
+      labelColor: 'black',
+      color: 'black',
+      fill: 'none',
+      dash: 'draw',
+      size: 's',
+      arrowheadStart: 'none',
+      arrowheadEnd: 'arrow',
+      font: 'draw',
+      start: { x: start.x - Math.min(start.x, end.x), y: start.y - Math.min(start.y, end.y) },
+      end: { x: end.x - Math.min(start.x, end.x), y: end.y - Math.min(start.y, end.y) },
+      bend: 0,
+      richText: toRichText(''),
+      labelPosition: 0.5,
+      scale: 1,
+      elbowMidPoint: 0.5,
+    },
+    meta: { agentcanvasGenerated: true },
+  }
+  return shapeId
+}
+
+async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
+  const snapshot = await loadSnapshot(canvasUrl)
+  if (!snapshot) throw new Error('No canvas snapshot available.')
+
+  const pageId = findCurrentPageId(snapshot)
+  if (!pageId) throw new Error('No page found in canvas.')
+
+  const maxDepth = options.maxDepth ?? 3
+  const maxFiles = options.maxFiles ?? 80
+  const tree = await scanDirectory(projectDir, maxDepth)
+  const flat = flattenTree(tree, projectDir).slice(0, maxFiles)
+
+  if (flat.length === 0) {
+    throw new Error('No visible files found in project directory.')
+  }
+
+  const nodeWidth = 160
+  const nodeHeight = 50
+  const horizontalGap = 40
+  const verticalGap = 16
+  const indent = 60
+  const framePadding = 40
+
+  const baseX = options.x ?? 0
+  const baseY = options.y ?? 0
+
+  // Compute layout: indented tree
+  const layout = flat.map((item, i) => ({
+    ...item,
+    index: i,
+    x: baseX + framePadding + item.depth * indent,
+    y: baseY + framePadding + i * (nodeHeight + verticalGap),
+  }))
+
+  const maxX = Math.max(...layout.map((n) => n.x)) + nodeWidth
+  const maxY = layout[layout.length - 1].y + nodeHeight
+  const frameW = maxX - baseX + framePadding
+  const frameH = maxY - baseY + framePadding
+
+  // Add a frame that contains the whole visualization
+  const frameId = uniqueId(snapshot.store, 'shape', `frame-project-${Date.now()}`)
+  snapshot.store[frameId] = {
+    id: frameId,
+    typeName: 'shape',
+    type: 'frame',
+    x: baseX,
+    y: baseY,
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    index: nextIndex(),
+    parentId: pageId,
+    props: {
+      w: frameW,
+      h: frameH,
+      name: options.title ?? `${relative(resolve('..', projectDir), projectDir) || 'project'} structure`,
+      color: 'black',
+    },
+    meta: { agentcanvasGenerated: true },
+  }
+
+  const shapeByPath = new Map()
+
+  for (const item of layout) {
+    const shapeId = uniqueId(
+      snapshot.store,
+      'shape',
+      `note-${item.relPath.replace(/[\/\\]/g, '-')}-${Date.now()}-${item.index}`,
+    )
+    shapeByPath.set(item.relPath, shapeId)
+    snapshot.store[shapeId] = {
+      id: shapeId,
+      typeName: 'shape',
+      type: 'note',
+      x: item.x,
+      y: item.y,
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      index: nextIndex(),
+      parentId: pageId,
+      props: {
+        color: item.type === 'directory' ? 'blue' : 'yellow',
+        labelColor: 'black',
+        size: 's',
+        font: 'draw',
+        align: 'middle',
+        verticalAlign: 'middle',
+        growY: 0,
+        url: '',
+        richText: toRichText(item.name),
+        scale: 1,
+        textFirstEditedBy: null,
+        fontSizeAdjustment: null,
+      },
+      meta: { agentcanvasGenerated: true, projectPath: item.relPath },
+    }
+  }
+
+  // Draw arrows from parent to child
+  for (const item of layout) {
+    if (!item.parent) continue
+    const parentShapeId = shapeByPath.get(item.parent.relPath)
+    const childShapeId = shapeByPath.get(item.relPath)
+    if (!parentShapeId || !childShapeId) continue
+    const parentNode = snapshot.store[parentShapeId]
+    const childNode = snapshot.store[childShapeId]
+    const start = { x: parentNode.x + nodeWidth / 2, y: parentNode.y + nodeHeight }
+    const end = { x: childNode.x + nodeWidth / 2, y: childNode.y }
+    createArrowShape(snapshot, pageId, parentShapeId, childShapeId, start, end)
+  }
+
+  await saveSnapshot(canvasUrl, snapshot)
+  return { frameId, itemCount: flat.length, projectDir }
+}
+
 async function addTextShape(canvasUrl, text, options = {}) {
   const snapshot = await loadSnapshot(canvasUrl)
   if (!snapshot) throw new Error('No canvas snapshot available.')
@@ -203,7 +411,7 @@ async function addTextShape(canvasUrl, text, options = {}) {
     rotation: 0,
     isLocked: false,
     opacity: 1,
-    index: `a1${now}`,
+    index: nextIndex(),
     parentId: pageId,
     props: {
       richText: toRichText(text),
@@ -270,7 +478,7 @@ async function addImageShape(canvasUrl, imagePath, options = {}) {
     rotation: 0,
     isLocked: false,
     opacity: 1,
-    index: `a1${Date.now()}`,
+    index: nextIndex(),
     parentId: pageId,
     props: {
       w: options.width ?? 512,
@@ -398,6 +606,20 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'canvas_visualize_project',
+    description: 'Visualize the current project directory structure on the AgentCanvas whiteboard. Creates a frame containing notes for directories and files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: projectDirProperty,
+        maxDepth: { type: 'number', description: 'Maximum directory depth to scan (default 3).' },
+        maxFiles: { type: 'number', description: 'Maximum number of files/directories to show (default 80).' },
+        x: { type: 'number', description: 'X coordinate for the top-left of the visualization.' },
+        y: { type: 'number', description: 'Y coordinate for the top-left of the visualization.' },
+      },
+    },
+  },
 ]
 
 async function resolveCanvasUrl(args) {
@@ -464,6 +686,21 @@ const HANDLERS = {
     const result = await clearCanvas(canvasUrl)
     return {
       content: [{ type: 'text', text: 'Cleared the current page.' }],
+      ...result,
+    }
+  },
+
+  async canvas_visualize_project(args) {
+    const projectDir = resolveProjectDir(args)
+    const canvasUrl = await resolveCanvasUrl(args)
+    const result = await createProjectVisualization(canvasUrl, projectDir, args)
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Visualized ${result.itemCount} files/directories from ${result.projectDir} in frame ${result.frameId}.`,
+        },
+      ],
       ...result,
     }
   },

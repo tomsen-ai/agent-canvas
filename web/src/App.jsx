@@ -21,6 +21,7 @@ function CanvasSync() {
         if (snapshot) {
           ignoreNextSave.current = true
           editor.loadSnapshot(snapshot)
+          editor.zoomToFit()
         }
       } catch (error) {
         console.error('Failed to initialize canvas:', error)
