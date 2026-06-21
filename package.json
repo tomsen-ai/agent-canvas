@@ -1,0 +1,29 @@
+{
+  "name": "agentcanvas",
+  "version": "0.1.0",
+  "description": "A local infinite canvas for AI agents (Kimi Code, Claude Code, OpenCode, Codex).",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:web && node ./server/index.mjs",
+    "build": "npm run build:web",
+    "build:web": "cd web && npm run build",
+    "start": "node ./server/index.mjs",
+    "start:mcp": "node ./mcp/server.mjs"
+  },
+  "keywords": [
+    "canvas",
+    "tldraw",
+    "mcp",
+    "kimi-code",
+    "claude-code",
+    "opencanvas",
+    "ai-agent"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
