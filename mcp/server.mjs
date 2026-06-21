@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, stat, copyFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import readline from 'node:readline'
 import tldrawUtils from '../web/node_modules/@tldraw/utils/dist-cjs/index.js'
@@ -302,18 +303,18 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
   const baseX = options.x ?? 0
   const baseY = options.y ?? 0
 
-  // Compute layout: indented tree
+  // Compute layout: indented tree, relative to frame origin
   const layout = flat.map((item, i) => ({
     ...item,
     index: i,
-    x: baseX + framePadding + item.depth * indent,
-    y: baseY + framePadding + i * (nodeHeight + verticalGap),
+    x: framePadding + item.depth * indent,
+    y: framePadding + i * (nodeHeight + verticalGap),
   }))
 
   const maxX = Math.max(...layout.map((n) => n.x)) + nodeWidth
   const maxY = layout[layout.length - 1].y + nodeHeight
-  const frameW = maxX - baseX + framePadding
-  const frameH = maxY - baseY + framePadding
+  const frameW = maxX + framePadding
+  const frameH = maxY + framePadding
 
   // Add a frame that contains the whole visualization
   const frameId = uniqueId(snapshot.store, 'shape', `frame-project-${Date.now()}`)
@@ -356,7 +357,7 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
       isLocked: false,
       opacity: 1,
       index: nextIndex(),
-      parentId: pageId,
+      parentId: frameId,
       props: {
         color: item.type === 'directory' ? 'blue' : 'yellow',
         labelColor: 'black',
@@ -375,7 +376,7 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
     }
   }
 
-  // Draw arrows from parent to child
+  // Draw arrows from parent to child (coordinates relative to frame)
   for (const item of layout) {
     if (!item.parent) continue
     const parentShapeId = shapeByPath.get(item.parent.relPath)
@@ -385,7 +386,7 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
     const childNode = snapshot.store[childShapeId]
     const start = { x: parentNode.x + nodeWidth / 2, y: parentNode.y + nodeHeight }
     const end = { x: childNode.x + nodeWidth / 2, y: childNode.y }
-    createArrowShape(snapshot, pageId, parentShapeId, childShapeId, start, end)
+    createArrowShape(snapshot, frameId, parentShapeId, childShapeId, start, end)
   }
 
   await saveSnapshot(canvasUrl, snapshot)
@@ -512,8 +513,8 @@ async function createFileVisualization(canvasUrl, filePath, options = {}) {
     const row = Math.floor(i / nodesPerRow)
     const col = i % nodesPerRow
     const shapeId = uniqueId(snapshot.store, 'shape', `note-${fileName}-${item.name}-${Date.now()}-${i}`)
-    const x = baseX + framePadding + col * (nodeWidth + horizontalGap)
-    const y = baseY + framePadding + row * (nodeHeight + verticalGap)
+    const x = framePadding + col * (nodeWidth + horizontalGap)
+    const y = framePadding + row * (nodeHeight + verticalGap)
     snapshot.store[shapeId] = {
       id: shapeId,
       typeName: 'shape',
@@ -524,7 +525,7 @@ async function createFileVisualization(canvasUrl, filePath, options = {}) {
       isLocked: false,
       opacity: 1,
       index: nextIndex(),
-      parentId: pageId,
+      parentId: frameId,
       props: {
         color: colorForKind(item.kind),
         labelColor: 'black',
@@ -545,6 +546,180 @@ async function createFileVisualization(canvasUrl, filePath, options = {}) {
 
   await saveSnapshot(canvasUrl, snapshot)
   return { frameId, itemCount: items.length, filePath: absPath }
+}
+
+const CODE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'])
+
+async function scanCodeFiles(dir, maxDepth = 4, currentDepth = 0) {
+  if (currentDepth > maxDepth) return []
+  const entries = await readdir(dir, { withFileTypes: true })
+  const result = []
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (IGNORED_DIRS.has(entry.name)) continue
+      const children = await scanCodeFiles(join(dir, entry.name), maxDepth, currentDepth + 1)
+      result.push(...children)
+    } else {
+      const ext = extname(entry.name).toLowerCase()
+      if (CODE_EXTENSIONS.has(ext)) {
+        result.push(join(dir, entry.name))
+      }
+    }
+  }
+  return result
+}
+
+function extractImports(content) {
+  const imports = []
+
+  // ES imports: import ... from './path' or import './path'
+  const esRegex = /import\s+(?:(?:\{[^}]*\}|[^'"{}]*?)\s+from\s+)?['"]([^'"]+)['"];?/g
+  let match
+  while ((match = esRegex.exec(content)) !== null) {
+    imports.push(match[1])
+  }
+
+  // CommonJS: require('./path')
+  const cjsRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+  while ((match = cjsRegex.exec(content)) !== null) {
+    imports.push(match[1])
+  }
+
+  return imports.filter((p) => p.startsWith('.') && !p.endsWith('.css') && !p.endsWith('.scss') && !p.endsWith('.less'))
+}
+
+function resolveImportPath(importPath, fromFile, projectDir) {
+  const fromDir = dirname(fromFile)
+  let resolved = resolve(fromDir, importPath)
+  const extensions = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '/index.js', '/index.ts', '/index.jsx', '/index.tsx']
+  for (const ext of extensions) {
+    const candidate = resolved + ext
+    try {
+      const s = statSync(candidate)
+      if (s.isFile()) {
+        return relative(projectDir, candidate)
+      }
+    } catch {
+      // continue
+    }
+  }
+  return null
+}
+
+async function createDependencyVisualization(canvasUrl, projectDir, options = {}) {
+  const snapshot = await loadSnapshot(canvasUrl)
+  if (!snapshot) throw new Error('No canvas snapshot available.')
+
+  const pageId = findCurrentPageId(snapshot)
+  if (!pageId) throw new Error('No page found in canvas.')
+
+  const maxFiles = options.maxFiles ?? 40
+  const codeFiles = (await scanCodeFiles(projectDir)).slice(0, maxFiles)
+
+  if (codeFiles.length === 0) {
+    throw new Error('No JS/TS files found in project directory.')
+  }
+
+  const fileNodes = []
+  for (const filePath of codeFiles) {
+    const relPath = relative(projectDir, filePath)
+    const content = await readFile(filePath, 'utf8')
+    const imports = extractImports(content)
+      .map((p) => resolveImportPath(p, filePath, projectDir))
+      .filter(Boolean)
+    fileNodes.push({ relPath, filePath, imports })
+  }
+
+  const nodeWidth = 180
+  const nodeHeight = 50
+  const horizontalGap = 80
+  const verticalGap = 24
+  const framePadding = 40
+  const nodesPerRow = 4
+
+  const baseX = options.x ?? 0
+  const baseY = options.y ?? 0
+  const rows = Math.ceil(fileNodes.length / nodesPerRow)
+  const frameW = framePadding * 2 + nodesPerRow * (nodeWidth + horizontalGap) - horizontalGap
+  const frameH = framePadding * 2 + rows * (nodeHeight + verticalGap) - verticalGap
+
+  const frameId = uniqueId(snapshot.store, 'shape', `frame-deps-${Date.now()}`)
+  snapshot.store[frameId] = {
+    id: frameId,
+    typeName: 'shape',
+    type: 'frame',
+    x: baseX,
+    y: baseY,
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    index: nextIndex(),
+    parentId: pageId,
+    props: {
+      w: frameW,
+      h: frameH,
+      name: options.title ?? 'module dependencies',
+      color: 'black',
+    },
+    meta: { agentcanvasGenerated: true },
+  }
+
+  const shapeByPath = new Map()
+
+  for (let i = 0; i < fileNodes.length; i++) {
+    const node = fileNodes[i]
+    const row = Math.floor(i / nodesPerRow)
+    const col = i % nodesPerRow
+    const shapeId = uniqueId(snapshot.store, 'shape', `note-dep-${node.relPath.replace(/[\/\\]/g, '-')}-${Date.now()}-${i}`)
+    const x = framePadding + col * (nodeWidth + horizontalGap)
+    const y = framePadding + row * (nodeHeight + verticalGap)
+    shapeByPath.set(node.relPath, shapeId)
+    snapshot.store[shapeId] = {
+      id: shapeId,
+      typeName: 'shape',
+      type: 'note',
+      x,
+      y,
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      index: nextIndex(),
+      parentId: frameId,
+      props: {
+        color: node.relPath.startsWith('node_modules') ? 'gray' : 'blue',
+        labelColor: 'black',
+        size: 's',
+        font: 'draw',
+        align: 'middle',
+        verticalAlign: 'middle',
+        growY: 0,
+        url: '',
+        richText: toRichText(node.relPath),
+        scale: 1,
+        textFirstEditedBy: null,
+        fontSizeAdjustment: null,
+      },
+      meta: { agentcanvasGenerated: true, relPath: node.relPath },
+    }
+  }
+
+  // Draw dependency arrows (coordinates relative to frame)
+  for (const node of fileNodes) {
+    const fromShapeId = shapeByPath.get(node.relPath)
+    if (!fromShapeId) continue
+    const fromNode = snapshot.store[fromShapeId]
+    for (const depRelPath of node.imports) {
+      const toShapeId = shapeByPath.get(depRelPath)
+      if (!toShapeId || toShapeId === fromShapeId) continue
+      const toNode = snapshot.store[toShapeId]
+      const start = { x: fromNode.x + nodeWidth / 2, y: fromNode.y + nodeHeight / 2 }
+      const end = { x: toNode.x + nodeWidth / 2, y: toNode.y + nodeHeight / 2 }
+      createArrowShape(snapshot, frameId, fromShapeId, toShapeId, start, end)
+    }
+  }
+
+  await saveSnapshot(canvasUrl, snapshot)
+  return { frameId, itemCount: fileNodes.length, projectDir }
 }
 
 async function addTextShape(canvasUrl, text, options = {}) {
@@ -789,6 +964,19 @@ const TOOLS = [
       required: ['filePath'],
     },
   },
+  {
+    name: 'canvas_visualize_dependencies',
+    description: 'Visualize import dependencies between JS/TS files in the current project. Draws files as notes and import relationships as arrows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: projectDirProperty,
+        maxFiles: { type: 'number', description: 'Maximum number of files to include (default 40).' },
+        x: { type: 'number', description: 'X coordinate for the top-left of the visualization.' },
+        y: { type: 'number', description: 'Y coordinate for the top-left of the visualization.' },
+      },
+    },
+  },
 ]
 
 async function resolveCanvasUrl(args) {
@@ -882,6 +1070,21 @@ const HANDLERS = {
         {
           type: 'text',
           text: `Visualized ${result.itemCount} symbols from ${result.filePath} in frame ${result.frameId}.`,
+        },
+      ],
+      ...result,
+    }
+  },
+
+  async canvas_visualize_dependencies(args) {
+    const projectDir = resolveProjectDir(args)
+    const canvasUrl = await resolveCanvasUrl(args)
+    const result = await createDependencyVisualization(canvasUrl, projectDir, args)
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Visualized ${result.itemCount} files and their import dependencies in frame ${result.frameId}.`,
         },
       ],
       ...result,
