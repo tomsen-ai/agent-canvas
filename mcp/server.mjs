@@ -330,58 +330,81 @@ async function clearCanvas(canvasUrl) {
   return { ok: true, removedPageId: pageId }
 }
 
+const projectDirProperty = {
+  type: 'string',
+  description: 'Absolute project directory. Defaults to the current working directory.',
+}
+
 const TOOLS = [
   {
     name: 'canvas_open',
-    description: 'Start the AgentCanvas local server for a project and return its URL.',
+    description: 'Open the AgentCanvas whiteboard for the current project. Starts a local server and returns the browser URL. Use this first if the user wants to view or edit the canvas.',
     inputSchema: {
       type: 'object',
       properties: {
-        projectDir: { type: 'string', description: 'Absolute project directory.' },
+        projectDir: projectDirProperty,
       },
     },
   },
   {
     name: 'canvas_add_text',
-    description: 'Add a text shape to the current AgentCanvas page.',
+    description: 'Add a text note to the AgentCanvas whiteboard. The server starts automatically if needed.',
     inputSchema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'Text content.' },
-        x: { type: 'number', description: 'X coordinate.' },
-        y: { type: 'number', description: 'Y coordinate.' },
-        color: { type: 'string', description: 'Color name.' },
+        x: { type: 'number', description: 'X coordinate on the canvas.' },
+        y: { type: 'number', description: 'Y coordinate on the canvas.' },
+        color: { type: 'string', description: 'Color name, e.g. black, red, blue.' },
         size: { type: 'string', description: 'Text size: s, m, l, xl.' },
+        projectDir: projectDirProperty,
       },
       required: ['text'],
     },
   },
   {
     name: 'canvas_add_image',
-    description: 'Copy a local image into AgentCanvas assets and add it as an image shape.',
+    description: 'Copy a local image file into the AgentCanvas whiteboard. The server starts automatically if needed.',
     inputSchema: {
       type: 'object',
       properties: {
         imagePath: { type: 'string', description: 'Absolute path to the image file.' },
-        x: { type: 'number', description: 'X coordinate.' },
-        y: { type: 'number', description: 'Y coordinate.' },
-        width: { type: 'number', description: 'Display width.' },
-        height: { type: 'number', description: 'Display height.' },
+        x: { type: 'number', description: 'X coordinate on the canvas.' },
+        y: { type: 'number', description: 'Y coordinate on the canvas.' },
+        width: { type: 'number', description: 'Display width in pixels.' },
+        height: { type: 'number', description: 'Display height in pixels.' },
+        projectDir: projectDirProperty,
       },
       required: ['imagePath'],
     },
   },
   {
     name: 'canvas_get_state',
-    description: 'Get a summary of the current AgentCanvas state.',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'List the shapes currently on the AgentCanvas whiteboard.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: projectDirProperty,
+      },
+    },
   },
   {
     name: 'canvas_clear',
-    description: 'Remove all shapes from the current page.',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'Remove all shapes from the current AgentCanvas page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: projectDirProperty,
+      },
+    },
   },
 ]
+
+async function resolveCanvasUrl(args) {
+  const projectDir = resolveProjectDir(args)
+  const { url } = await ensureServer(projectDir)
+  return url
+}
 
 const HANDLERS = {
   async canvas_open(args) {
@@ -391,7 +414,7 @@ const HANDLERS = {
       content: [
         {
           type: 'text',
-          text: `AgentCanvas is running at ${url} (${alreadyRunning ? 'already running' : 'started now'}).`,
+          text: `AgentCanvas is running at ${url} (${alreadyRunning ? 'already running' : 'started now'}). Open this URL in a browser to view and edit the canvas.`,
         },
       ],
       url,
@@ -400,29 +423,35 @@ const HANDLERS = {
   },
 
   async canvas_add_text(args) {
-    const canvasUrl = runningServer?.url ?? `http://127.0.0.1:${DEFAULT_PORT}`
+    const canvasUrl = await resolveCanvasUrl(args)
     const result = await addTextShape(canvasUrl, args.text, args)
     return {
       content: [
-        { type: 'text', text: `Added text shape ${result.shapeId} to page ${result.pageId}.` },
+        {
+          type: 'text',
+          text: `Added text shape ${result.shapeId} to page ${result.pageId}.`,
+        },
       ],
       ...result,
     }
   },
 
   async canvas_add_image(args) {
-    const canvasUrl = runningServer?.url ?? `http://127.0.0.1:${DEFAULT_PORT}`
+    const canvasUrl = await resolveCanvasUrl(args)
     const result = await addImageShape(canvasUrl, args.imagePath, args)
     return {
       content: [
-        { type: 'text', text: `Added image shape ${result.shapeId} to page ${result.pageId}.` },
+        {
+          type: 'text',
+          text: `Added image shape ${result.shapeId} to page ${result.pageId}.`,
+        },
       ],
       ...result,
     }
   },
 
   async canvas_get_state(args) {
-    const canvasUrl = runningServer?.url ?? `http://127.0.0.1:${DEFAULT_PORT}`
+    const canvasUrl = await resolveCanvasUrl(args)
     const state = await getState(canvasUrl)
     return {
       content: [{ type: 'text', text: JSON.stringify(state, null, 2) }],
@@ -431,7 +460,7 @@ const HANDLERS = {
   },
 
   async canvas_clear(args) {
-    const canvasUrl = runningServer?.url ?? `http://127.0.0.1:${DEFAULT_PORT}`
+    const canvasUrl = await resolveCanvasUrl(args)
     const result = await clearCanvas(canvasUrl)
     return {
       content: [{ type: 'text', text: 'Cleared the current page.' }],
