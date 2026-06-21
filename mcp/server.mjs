@@ -392,6 +392,161 @@ async function createProjectVisualization(canvasUrl, projectDir, options = {}) {
   return { frameId, itemCount: flat.length, projectDir }
 }
 
+function parseCodeFile(content, fileName) {
+  const ext = extname(fileName).toLowerCase()
+  const isTs = ext === '.ts' || ext === '.tsx' || ext === '.mts' || ext === '.cts'
+  const isJs = ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs'
+  if (!isTs && !isJs) {
+    return []
+  }
+
+  const items = []
+
+  // Class declarations
+  const classRegex = /(?:export\s+(?:default\s+)?)?class\s+(\w+)/g
+  let match
+  while ((match = classRegex.exec(content)) !== null) {
+    items.push({ name: match[1], kind: 'class' })
+  }
+
+  // Function declarations: function name(...) or export function name(...)
+  const functionRegex = /(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)\s*\(/g
+  while ((match = functionRegex.exec(content)) !== null) {
+    items.push({ name: match[1], kind: 'function' })
+  }
+
+  // Const/Let function assignments: const name = (...) => or const name = async (...) =>
+  const arrowRegex = /(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|\w+)\s*=>/g
+  while ((match = arrowRegex.exec(content)) !== null) {
+    // Avoid matching React components twice if already caught by function regex
+    if (!items.some((i) => i.name === match[1])) {
+      items.push({ name: match[1], kind: 'function' })
+    }
+  }
+
+  // TypeScript interfaces
+  if (isTs) {
+    const interfaceRegex = /(?:export\s+)?interface\s+(\w+)/g
+    while ((match = interfaceRegex.exec(content)) !== null) {
+      items.push({ name: match[1], kind: 'interface' })
+    }
+    const typeRegex = /(?:export\s+)?type\s+(\w+)\s*=/g
+    while ((match = typeRegex.exec(content)) !== null) {
+      items.push({ name: match[1], kind: 'type' })
+    }
+  }
+
+  return items.slice(0, 40)
+}
+
+function colorForKind(kind) {
+  switch (kind) {
+    case 'class':
+      return 'blue'
+    case 'interface':
+    case 'type':
+      return 'green'
+    case 'function':
+      return 'yellow'
+    default:
+      return 'light-gray'
+  }
+}
+
+async function createFileVisualization(canvasUrl, filePath, options = {}) {
+  const snapshot = await loadSnapshot(canvasUrl)
+  if (!snapshot) throw new Error('No canvas snapshot available.')
+
+  const pageId = findCurrentPageId(snapshot)
+  if (!pageId) throw new Error('No page found in canvas.')
+
+  const absPath = resolve(filePath)
+  const fileStat = await stat(absPath)
+  if (!fileStat.isFile()) throw new Error(`Not a file: ${filePath}`)
+
+  const content = await readFile(absPath, 'utf8')
+  const fileName = absPath.split(sep).pop() ?? 'file'
+  const maxSymbols = options.maxSymbols ?? 20
+  const items = parseCodeFile(content, fileName).slice(0, maxSymbols)
+
+  if (items.length === 0) {
+    throw new Error('No functions, classes or types found in this file.')
+  }
+
+  const nodeWidth = 180
+  const nodeHeight = 60
+  const horizontalGap = 24
+  const verticalGap = 20
+  const framePadding = 40
+  const nodesPerRow = 3
+
+  const baseX = options.x ?? 0
+  const baseY = options.y ?? 0
+  const rows = Math.ceil(items.length / nodesPerRow)
+  const frameW = framePadding * 2 + nodesPerRow * (nodeWidth + horizontalGap) - horizontalGap
+  const frameH = framePadding * 2 + rows * (nodeHeight + verticalGap) - verticalGap
+
+  const frameId = uniqueId(snapshot.store, 'shape', `frame-file-${Date.now()}`)
+  snapshot.store[frameId] = {
+    id: frameId,
+    typeName: 'shape',
+    type: 'frame',
+    x: baseX,
+    y: baseY,
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    index: nextIndex(),
+    parentId: pageId,
+    props: {
+      w: frameW,
+      h: frameH,
+      name: options.title ?? fileName,
+      color: 'black',
+    },
+    meta: { agentcanvasGenerated: true },
+  }
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const row = Math.floor(i / nodesPerRow)
+    const col = i % nodesPerRow
+    const shapeId = uniqueId(snapshot.store, 'shape', `note-${fileName}-${item.name}-${Date.now()}-${i}`)
+    const x = baseX + framePadding + col * (nodeWidth + horizontalGap)
+    const y = baseY + framePadding + row * (nodeHeight + verticalGap)
+    snapshot.store[shapeId] = {
+      id: shapeId,
+      typeName: 'shape',
+      type: 'note',
+      x,
+      y,
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      index: nextIndex(),
+      parentId: pageId,
+      props: {
+        color: colorForKind(item.kind),
+        labelColor: 'black',
+        size: 'm',
+        font: 'draw',
+        align: 'middle',
+        verticalAlign: 'middle',
+        growY: 0,
+        url: '',
+        richText: toRichText(`${item.name}`),
+        scale: 1,
+        textFirstEditedBy: null,
+        fontSizeAdjustment: null,
+      },
+      meta: { agentcanvasGenerated: true, kind: item.kind },
+    }
+  }
+
+  await saveSnapshot(canvasUrl, snapshot)
+  return { frameId, itemCount: items.length, filePath: absPath }
+}
+
 async function addTextShape(canvasUrl, text, options = {}) {
   const snapshot = await loadSnapshot(canvasUrl)
   if (!snapshot) throw new Error('No canvas snapshot available.')
@@ -620,6 +775,20 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'canvas_visualize_file',
+    description: 'Visualize the structure of a code file on the AgentCanvas whiteboard. Extracts functions, classes, interfaces and types and draws them as connected notes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to the code file.' },
+        projectDir: projectDirProperty,
+        x: { type: 'number', description: 'X coordinate for the top-left of the visualization.' },
+        y: { type: 'number', description: 'Y coordinate for the top-left of the visualization.' },
+      },
+      required: ['filePath'],
+    },
+  },
 ]
 
 async function resolveCanvasUrl(args) {
@@ -699,6 +868,20 @@ const HANDLERS = {
         {
           type: 'text',
           text: `Visualized ${result.itemCount} files/directories from ${result.projectDir} in frame ${result.frameId}.`,
+        },
+      ],
+      ...result,
+    }
+  },
+
+  async canvas_visualize_file(args) {
+    const canvasUrl = await resolveCanvasUrl(args)
+    const result = await createFileVisualization(canvasUrl, args.filePath, args)
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Visualized ${result.itemCount} symbols from ${result.filePath} in frame ${result.frameId}.`,
         },
       ],
       ...result,
