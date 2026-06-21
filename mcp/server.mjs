@@ -876,7 +876,8 @@ const projectDirProperty = {
 const TOOLS = [
   {
     name: 'canvas_open',
-    description: 'Open the AgentCanvas whiteboard for the current project. Starts a local server and returns the browser URL. Use this first if the user wants to view or edit the canvas.',
+    description: 'Open the AgentCanvas whiteboard for the current project. Starts a local server and returns the browser URL. Call this first whenever the user wants to view, edit, or share the canvas.',
+    annotations: { title: 'Open AgentCanvas', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -886,7 +887,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_add_text',
-    description: 'Add a text note to the AgentCanvas whiteboard. The server starts automatically if needed.',
+    description: 'Add a text note to the AgentCanvas whiteboard. Use this proactively when the user asks to take a note, label something, or summarize on the canvas. The server starts automatically if needed.',
+    annotations: { title: 'Add text note', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -902,7 +904,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_add_image',
-    description: 'Copy a local image file into the AgentCanvas whiteboard. The server starts automatically if needed.',
+    description: 'Copy a local image file into the AgentCanvas whiteboard. Use this proactively when the user mentions a screenshot, diagram, or local image they want on the canvas. The server starts automatically if needed.',
+    annotations: { title: 'Add image', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -918,7 +921,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_get_state',
-    description: 'List the shapes currently on the AgentCanvas whiteboard.',
+    description: 'List the shapes currently on the AgentCanvas whiteboard. Use this when the user asks what is already drawn.',
+    annotations: { title: 'List canvas shapes', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -928,7 +932,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_clear',
-    description: 'Remove all shapes from the current AgentCanvas page.',
+    description: 'Remove all shapes from the current AgentCanvas page. Use only when the user explicitly asks to clear or reset the canvas.',
+    annotations: { title: 'Clear canvas', readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -938,7 +943,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_visualize_project',
-    description: 'Visualize the current project directory structure on the AgentCanvas whiteboard. Creates a frame containing notes for directories and files.',
+    description: 'Visualize the current project directory structure on the AgentCanvas whiteboard. Creates a frame containing notes for directories and files, connected by parent-child arrows. Use this proactively when the user asks about project structure, codebase overview, or how files are organized.',
+    annotations: { title: 'Visualize project structure', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -952,7 +958,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_visualize_file',
-    description: 'Visualize the structure of a code file on the AgentCanvas whiteboard. Extracts functions, classes, interfaces and types and draws them as connected notes.',
+    description: 'Visualize the structure of a code file on the AgentCanvas whiteboard. Extracts functions, classes, interfaces and types and draws them as notes inside a frame. Use this proactively when the user wants to understand a specific file or asks what is inside a code file.',
+    annotations: { title: 'Visualize code file', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -966,7 +973,8 @@ const TOOLS = [
   },
   {
     name: 'canvas_visualize_dependencies',
-    description: 'Visualize import dependencies between JS/TS files in the current project. Draws files as notes and import relationships as arrows.',
+    description: 'Visualize import dependencies between JS/TS files in the current project. Draws files as notes inside a frame and import relationships as arrows. Use this proactively when the user asks about dependencies, module graph, what imports what, or coupling between files.',
+    annotations: { title: 'Visualize module dependencies', readOnlyHint: false },
     inputSchema: {
       type: 'object',
       properties: {

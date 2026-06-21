@@ -29,7 +29,7 @@
 
 ## Claude Code 配置
 
-编辑 `~/.claude/CLAUDE.md`（没有则新建），加入：
+Claude Code 的 MCP 服务器配置在 `~/.claude.json`。编辑该文件，在 `mcpServers` 下加入：
 
 ```json
 {
@@ -66,6 +66,16 @@
 
 保存后完全退出并重新打开 Claude Desktop。你可以在设置里看到 `agentcanvas` 工具是否加载成功。
 
+## 让 Claude 主动调用（推荐）
+
+把本仓库里的 `.claude/CLAUDE.md` 复制到你的项目根目录（或 `~/.claude/CLAUDE.md`），Claude 就会在这些场景下**自动**使用画布：
+
+- 询问项目结构 / 代码组织 → 自动 `canvas_visualize_project`
+- 询问某个文件里的函数、类、类型 → 自动 `canvas_visualize_file`
+- 询问依赖关系 / 模块图 / 谁引用了谁 → 自动 `canvas_visualize_dependencies`
+- 想记笔记、加标签、总结 → 自动 `canvas_add_text`
+- 提到本地截图 / 图片 / 流程图 → 自动 `canvas_add_image`
+
 ## 可用工具
 
 | 工具 | 作用 |
@@ -75,6 +85,9 @@
 | `canvas_add_image` | 把本地图片复制到画布 |
 | `canvas_get_state` | 查看当前页有哪些图形 |
 | `canvas_clear` | 清空当前页 |
+| `canvas_visualize_project` | 把项目目录结构可视化到画布 |
+| `canvas_visualize_file` | 把单个代码文件的函数/类/类型可视化到画布 |
+| `canvas_visualize_dependencies` | 把 JS/TS 文件间的 import 依赖关系可视化到画布 |
 
 ## 典型用法
 
@@ -83,6 +96,9 @@
 - “打开当前项目的画布”
 - “在画布上添加一个文本：项目架构 overview，放在 (100, 100)”
 - “把 `/Users/YOUR_NAME/Downloads/diagram.png` 添加到画布”
+- “可视化这个项目的目录结构”
+- “分析 `server/api-routes.mjs` 这个文件”
+- “画一下这个项目的模块依赖图”
 - “清空画布”
 
 Claude 会自动调用对应工具。画布链接出现后，你可以在浏览器里打开并手动编辑。
